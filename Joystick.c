@@ -58,12 +58,18 @@ void SetupHardware(void) {
 	// Both PORTD and PORTB will be used for the optional LED flashing and buzzer.
 	#warning LED and Buzzer functionality enabled. All pins on both PORTB and \
 PORTD will toggle when printing is done.
+	#endif
+
 	DDRD  = 0xFF; //Teensy uses PORTD
 	PORTD =  0x0;
                   //We'll just flash all pins on both ports since the UNO R3
 	DDRB  = 0xFF; //uses PORTB. Micro can use either or, but both give us 2 LEDs
 	PORTB =  0x0; //The ATmega328P on the UNO will be resetting, so unplug it?
-	#endif
+
+	// Init pin 13 on arduino leonardo (LEDPIN)
+	DDRC |= 1 << 7;
+	PORTC &= ~(1 << 7);
+	
 	// The USB stack should be initialized last.
 	USB_Init();
 }
@@ -71,11 +77,15 @@ PORTD will toggle when printing is done.
 // Fired to indicate that the device is enumerating.
 void EVENT_USB_Device_Connect(void) {
 	// We can indicate that we're enumerating here (via status LEDs, sound, etc.).
+	// turn off pin 13
+	PORTC &= ~(1 << 7);
 }
 
 // Fired to indicate that the device is no longer connected to a host.
 void EVENT_USB_Device_Disconnect(void) {
 	// We can indicate that our device is not ready (via status LEDs, sound, etc.).
+	// turn on pin 13
+	PORTC |= 1 << 7; // TODO turn this into a #define
 }
 
 // Fired when the host set the current configuration of the USB device after enumeration.
