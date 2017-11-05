@@ -18,7 +18,7 @@ F_CPU        = 16000000
 F_USB        = $(F_CPU)
 OPTIMIZATION = s
 TARGET       = Joystick
-SRC          = $(TARGET).c Descriptors.c image.c $(LUFA_SRC_USB)
+SRC          = $(TARGET).c Descriptors.c $(LUFA_SRC_USB)
 LUFA_PATH    = LUFA
 CC_FLAGS     = -DUSE_LUFA_CONFIG_HEADER -IConfig/
 LD_FLAGS     =
@@ -40,3 +40,6 @@ include $(LUFA_PATH)/Build/lufa_atprogram.mk
 # Target for LED/buzzer to alert when print is done
 with-alert: all
 with-alert: CC_FLAGS += -DALERT_WHEN_DONE
+
+upload: Joystick.hex
+	/Applications/Arduino.app/Contents/Java/hardware/tools/avr/bin/avrdude -C/Applications/Arduino.app/Contents/Java/hardware/tools/avr/etc/avrdude.conf -v -patmega32u4 -cavr109 -P/dev/cu.usbmodem1421 -b57600 -D -Uflash:w:$<:i

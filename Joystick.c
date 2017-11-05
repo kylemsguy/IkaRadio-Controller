@@ -26,7 +26,59 @@ these buttons for our use.
 
 #include "Joystick.h"
 
-extern const uint8_t image_data[0x12c1] PROGMEM;
+// extern const uint8_t image_data[0x12c1] PROGMEM;
+
+/*** Debounce ****
+The following is some -really bad- debounce code. I have a more robust library
+that I've used in other personal projects that would be a much better use
+here, especially considering that this is a stick indented for use with arcade
+fighters.
+This code exists solely to actually test on. This will eventually be replaced.
+**** Debounce ***/
+// Quick debounce hackery!
+// We're going to capture each port separately and store the contents into a 32-bit value.
+uint32_t pb_debounce = 0;
+uint32_t pd_debounce = 0;
+uint32_t pc_debounce = 0;
+
+// We also need a port state capture. We'll use a 32-bit value for this.
+uint32_t bd_state = 0;
+
+// We'll also give us some useful macros here.
+#define PINB_DEBOUNCED ((bd_state >> 0) & 0xFF)
+#define PIND_DEBOUNCED ((bd_state >> 8) & 0xFF) 
+#define PINC_DEBOUNCED ((bd_state >> 16) & 0xFF)
+
+// So let's do some debounce! Lazily, and really poorly.
+void debounce_ports(void) {
+	// We'll shift the current value of the debounce down one set of 8 bits. We'll also read in the state of the pins.
+	pb_debounce = (pb_debounce << 8) + PINB;
+	pd_debounce = (pd_debounce << 8) + PIND;
+	pc_debounce = (pc_debounce << 8) + PINC;
+
+	// We'll then iterate through a simple for loop.
+	for (int i = 0; i < 8; i++) {
+		if ((pb_debounce & (0x1010101 << i)) == (0x1010101 << i)) // wat
+			bd_state |= (1 << i);
+		else if ((pb_debounce & (0x1010101 << i)) == (0))
+			bd_state &= ~(uint32_t)(1 << i);
+
+		if ((pd_debounce & (0x1010101 << i)) == (0x1010101 << i))
+			bd_state |= (1 << (8 + i));
+		else if ((pd_debounce & (0x1010101 << i)) == (0))
+			bd_state &= ~(uint32_t)(1 << (8 + i));
+
+		if ((pc_debounce & (0x1010101 << i)) == (0x1010101 << i))
+			bd_state |= (1 << (16 + i));
+		else if ((pc_debounce & (0x1010101 << i)) == (0))
+			bd_state &= ~(uint32_t)(1 << (16 + i));
+	}
+	if (bd_state){
+		PORTD |= 1 << 2;
+	} else {
+		PORTD &= ~(1 << 2);
+	}
+}
 
 // Main entry point.
 int main(void) {
@@ -41,6 +93,8 @@ int main(void) {
 		HID_Task();
 		// We also need to run the main USB management task.
 		USB_USBTask();
+		// We also need to debounce the buttons
+		debounce_ports();
 	}
 }
 
@@ -60,15 +114,20 @@ void SetupHardware(void) {
 PORTD will toggle when printing is done.
 	#endif
 
-	DDRD  = 0xFF; //Teensy uses PORTD
-	PORTD =  0x0;
-                  //We'll just flash all pins on both ports since the UNO R3
-	DDRB  = 0xFF; //uses PORTB. Micro can use either or, but both give us 2 LEDs
-	PORTB =  0x0; //The ATmega328P on the UNO will be resetting, so unplug it?
+	DDRD  &= ~0xFF;
+	PORTD |=  0xFF;
+
+	DDRB  &= ~0xFF;
+	PORTB |=  0xFF;
 
 	// Init pin 13 on arduino leonardo (LEDPIN)
+	DDRC &= ~0xFF;
+	PORTC |= 0xff;
 	DDRC |= 1 << 7;
-	PORTC &= ~(1 << 7);
+	//PORTC &= ~(1 << 7);
+	PORTC |= 1 << 7;
+
+	// PIND to read from port D
 	
 	// The USB stack should be initialized last.
 	USB_Init();
@@ -187,7 +246,16 @@ void GetNextReport(USB_JoystickReport_Input_t* const ReportData) {
 		return;
 	}
 
-	// States and moves management
+	// Read from the pins (4 buttons, + plus)
+	int plus = PIND_DEBOUNCED & 2; // pin2
+	int minus = PIND_DEBOUNCED & 1; // pin3
+	int left = PIND_DEBOUNCED & (1 << 4); // pin4
+	int L = PINC_DEBOUNCED & (1 << 6); // pin5
+	int ZR = PIND_DEBOUNCED & (1 << 7); // pin6
+	int A = PIND_DEBOUNCED & (1 << 6); // pin12; PD6
+
+	// TODO fix PORTC reading
+
 	switch (state)
 	{
 		case SYNC_CONTROLLER:
@@ -206,71 +274,105 @@ void GetNextReport(USB_JoystickReport_Input_t* const ReportData) {
 			}
 			report_count++;
 			break;
-		case SYNC_POSITION:
-			if (report_count == 250)
-			{
-				report_count = 0;
-				xpos = 0;
-				ypos = 0;
-				state = STOP_X;
-			}
-			else
-			{
-				// Moving faster with LX/LY
-				ReportData->LX = STICK_MIN;
-				ReportData->LY = STICK_MIN;
-			}
-			if (report_count == 75 || report_count == 150)
-			{
-				// Clear the screen
+		default:
+			if(plus)
+				ReportData->Button |= SWITCH_PLUS;
+			if(minus)
 				ReportData->Button |= SWITCH_MINUS;
-			}
-			report_count++;
-			break;
-		case STOP_X:
-			state = MOVE_X;
-			break;
-		case STOP_Y:
-			if (ypos < 120 - 1)
-				state = MOVE_Y;
-			else
-				state = DONE;
-			break;
-		case MOVE_X:
-			if (ypos % 2)
-			{
+			if(left)
 				ReportData->HAT = HAT_LEFT;
-				xpos--;
-			}
-			else
-			{
-				ReportData->HAT = HAT_RIGHT;
-				xpos++;
-			}
-			if (xpos > 0 && xpos < 320 - 1)
-				state = STOP_X;
-			else
-				state = STOP_Y;
-			break;
-		case MOVE_Y:
-			ReportData->HAT = HAT_BOTTOM;
-			ypos++;
-			state = STOP_X;
-			break;
-		case DONE:
-			#ifdef ALERT_WHEN_DONE
-			portsval = ~portsval;
-			PORTD = portsval; //flash LED(s) and sound buzzer if attached
-			PORTB = portsval;
-			_delay_ms(250);
-			#endif
-			return;
-	}
+			if(L)
+				ReportData->Button |= SWITCH_L;
+			if(ZR)
+				ReportData->Button |= SWITCH_R;
+			if(A)
+				ReportData->Button |= SWITCH_A;
+		}
 
-	// Inking
-	if (state != SYNC_CONTROLLER && state != SYNC_POSITION)
-		if (pgm_read_byte(&(image_data[(xpos / 8) + (ypos * 40)])) & 1 << (xpos % 8))
-			ReportData->Button |= SWITCH_A;
+	// States and moves management
+	// switch (state)
+	// {
+	// 	case SYNC_CONTROLLER:
+	// 		if (report_count > 100)
+	// 		{
+	// 			report_count = 0;
+	// 			state = SYNC_POSITION;
+	// 		}
+	// 		else if (report_count == 25 || report_count == 50)
+	// 		{
+	// 			ReportData->Button |= SWITCH_L | SWITCH_R;
+	// 		}
+	// 		else if (report_count == 75 || report_count == 100)
+	// 		{
+	// 			ReportData->Button |= SWITCH_A;
+	// 		}
+	// 		report_count++;
+	// 		break;
+	// 	case SYNC_POSITION:
+	// 		if (report_count == 250)
+	// 		{
+	// 			report_count = 0;
+	// 			xpos = 0;
+	// 			ypos = 0;
+	// 			state = STOP_X;
+	// 		}
+	// 		else
+	// 		{
+	// 			// Moving faster with LX/LY
+	// 			ReportData->LX = STICK_MIN;
+	// 			ReportData->LY = STICK_MIN;
+	// 		}
+	// 		if (report_count == 75 || report_count == 150)
+	// 		{
+	// 			// Clear the screen
+	// 			ReportData->Button |= SWITCH_MINUS;
+	// 		}
+	// 		report_count++;
+	// 		break;
+	// 	case STOP_X:
+	// 		state = MOVE_X;
+	// 		break;
+	// 	case STOP_Y:
+	// 		if (ypos < 120 - 1)
+	// 			state = MOVE_Y;
+	// 		else
+	// 			state = DONE;
+	// 		break;
+	// 	case MOVE_X:
+	// 		if (ypos % 2)
+	// 		{
+	// 			ReportData->HAT = HAT_LEFT;
+	// 			xpos--;
+	// 		}
+	// 		else
+	// 		{
+	// 			ReportData->HAT = HAT_RIGHT;
+	// 			xpos++;
+	// 		}
+	// 		if (xpos > 0 && xpos < 320 - 1)
+	// 			state = STOP_X;
+	// 		else
+	// 			state = STOP_Y;
+	// 		break;
+	// 	case MOVE_Y:
+	// 		ReportData->HAT = HAT_BOTTOM;
+	// 		ypos++;
+	// 		state = STOP_X;
+	// 		break;
+	// 	case DONE:
+	// 		#ifdef ALERT_WHEN_DONE
+	// 		portsval = ~portsval;
+	// 		PORTD = portsval; //flash LED(s) and sound buzzer if attached
+	// 		PORTB = portsval;
+	// 		_delay_ms(250);
+	// 		#endif
+	// 		return;
+	// }
+
+	// // Inking
+	// if (state != SYNC_CONTROLLER && state != SYNC_POSITION)
+	// 	if (pgm_read_byte(&(image_data[(xpos / 8) + (ypos * 40)])) & 1 << (xpos % 8))
+	// 		ReportData->Button |= SWITCH_A;
 
 	// Prepare to echo this report
 	memcpy(&last_report, ReportData, sizeof(USB_JoystickReport_Input_t));
